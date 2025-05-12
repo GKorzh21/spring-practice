@@ -1,0 +1,58 @@
+stages:
+  - build
+  - test
+  - deploy
+
+variables:
+  SOLUTION_FILE: "WebAPI.sln"
+  API_PROJECT: "API/API.csproj"
+  TEST_PROJECT: "Tests/Tests.csproj"
+  PUBLISH_OUTPUT_DIR: "publish-output"
+  ASPNETCORE_ENVIRONMENT: "Production"
+  ASPNETCORE_URLS: "http://*:5245"
+
+  POSTGRES_DB: "pr_db"
+  POSTGRES_USER: "postgres"
+  POSTGRES_PASSWORD: "1234"
+  CONNECTION_STRING: "Host=postgres;Port=5432;Database=pr_db;Username=postgres;Password=1234"
+
+build:
+  stage: build
+  image: mcr.microsoft.com/dotnet/sdk:8.0
+  script:
+    - export PATH="$PATH:$HOME/.dotnet/tools"
+    - dotnet restore $SOLUTION_FILE
+    - dotnet build $SOLUTION_FILE --configuration Release --no-restore
+    - dotnet publish $API_PROJECT --configuration Release --no-build --output $PUBLISH_OUTPUT_DIR
+
+test:
+  stage: test
+  image: mcr.microsoft.com/dotnet/sdk:8.0
+  dependencies:
+    - build
+  script:
+    - dotnet tool install -g trx2junit
+    - export PATH="$PATH:$HOME/.dotnet/tools"
+    - dotnet test $TEST_PROJECT --configuration Release --no-build
+
+deploy:
+  stage: deploy
+  image: mcr.microsoft.com/dotnet/sdk:8.0
+  dependencies:
+    - build
+  services:
+    - name: postgres:latest
+      alias: postgres
+      variables:
+        POSTGRES_DB: pr_db
+        POSTGRES_USER: postgres
+        POSTGRES_PASSWORD: 1234
+  script:
+    - apt-get update
+    - apt-get install -y postgresql-client
+    - dotnet tool install --global dotnet-ef
+    - export PATH="$PATH:$HOME/.dotnet/tools"
+
+    - timeout 30s bash -c 'until pg_isready -h postgres -U postgres; do sleep 1; done' 
+
+    - dotnet ef database update --project $API_PROJECT --connection "$CONNECTION_STRING" || echo "Migrations not configured"
